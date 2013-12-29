@@ -6,10 +6,10 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
-	"html/template"
 	"image/gif"
 	"image/png"
 	"net/http"
+	"text/template"
 )
 
 const (
@@ -18,9 +18,11 @@ const (
 
 var tmpl = template.Must(template.New("tmpl").Parse(`
 <html><body>
-{{range .Frames}}
-<img src="{{.}}" /><br />
-{{end}}
+<ol>
+  {{range .Frames}}
+  <li><img src="{{.}}" /></li>
+  {{end}}
+</ol>
 </body></html>
 `))
 
@@ -30,20 +32,20 @@ func init() {
 
 func upload(w http.ResponseWriter, r *http.Request) {
 	c := appengine.NewContext(r)
-	f, _, err := r.FormFile("file")
-	if err != nil {
-		c.Errorf("formfile: %v", err)
-		http.Error(w, "No file specified", http.StatusBadRequest)
-		return
-	}
-	defer f.Close()
-	g, err := gif.DecodeAll(f)
+	mpf, _, err := r.FormFile("file")
+	//	if err != nil {
+	//		c.Errorf("formfile: %v", err)
+	//		http.Error(w, "No file specified", http.StatusBadRequest)
+	//		return
+	//	}
+	defer mpf.Close()
+	g, err := gif.DecodeAll(mpf)
 	if err != nil {
 		c.Errorf("gif decode: %v", err)
 		http.Error(w, "Error decoding GIF", http.StatusBadRequest)
 		return
 	}
-	fs := []string{}
+	fs := make([]string, 0, len(g.Image))
 	for _, i := range g.Image {
 		buf := bytes.NewBuffer(make([]byte, 0, bufSize))
 		// TODO: Upgrade to go1.2 and gif.Encode
@@ -53,9 +55,7 @@ func upload(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Error encoding", http.StatusInternalServerError)
 			return
 		}
-		dataURI := fmt.Sprintf("data:image/png;base64,%s", base64.StdEncoding.EncodeToString(buf.Bytes()))
-		fmt.Println(dataURI)
-		fs = append(fs, dataURI)
+		fs = append(fs, fmt.Sprintf("data:image/png;base64,%s", base64.StdEncoding.EncodeToString(buf.Bytes())))
 	}
 	tmpl.Execute(w, struct {
 		Frames []string
