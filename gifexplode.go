@@ -35,6 +35,7 @@ Original:<img src="{{.Orig}}" />
   <li><img src="{{.}}" /></li>
   {{end}}
 </ol>
+<p><a href="https://github.com/ImJasonH/gifexplode">source</a></p>
 </body></html>
 `))
 
