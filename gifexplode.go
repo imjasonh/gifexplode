@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
+	"image"
+	"image/color"
 	"image/gif"
 	"image/png"
 	"net/http"
@@ -49,7 +51,7 @@ func upload(w http.ResponseWriter, r *http.Request) {
 	for _, i := range g.Image {
 		buf := bytes.NewBuffer(make([]byte, 0, bufSize))
 		// TODO: Upgrade to go1.2 and gif.Encode
-		err = png.Encode(buf, i)
+		err = png.Encode(buf, layered{g.Image[0], i})
 		if err != nil {
 			c.Errorf("png encode: %v", err)
 			http.Error(w, "Error encoding", http.StatusInternalServerError)
@@ -60,4 +62,24 @@ func upload(w http.ResponseWriter, r *http.Request) {
 	tmpl.Execute(w, struct {
 		Frames []string
 	}{fs})
+}
+
+type layered struct {
+	back, front image.Image
+}
+
+func (l layered) At(x, y int) color.Color {
+	f := l.front.At(x, y)
+	if _, _, _, a := f.RGBA(); a == 0 {
+		return l.back.At(x, y)
+	}
+	return f
+}
+
+func (l layered) ColorModel() color.Model {
+	return l.back.ColorModel()
+}
+
+func (l layered) Bounds() image.Rectangle {
+	return l.back.Bounds()
 }
