@@ -3,6 +3,11 @@
     <label for="file">Select an animated GIF file</label>
     <input type="file" name="file" id="file" accept="image/gif"></input>
   </form>
+  <form id="form2" method="POST" action="/fetch">
+    <label for="url">Specify a URL</label>
+    <input type="text" name="url" id="url"></input>
+    <input type="submit">
+  </form>
   <script type="text/javascript">
     document.getElementById("file").onchange = function() {
       document.getElementById("form").submit();

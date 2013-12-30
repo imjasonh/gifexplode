@@ -2,6 +2,7 @@ package gifexplode
 
 import (
 	"appengine"
+	"appengine/urlfetch"
 
 	"bytes"
 	"encoding/base64"
@@ -10,6 +11,7 @@ import (
 	"image/color"
 	"image/gif"
 	"image/png"
+	"io"
 	"net/http"
 	"text/template"
 )
@@ -30,6 +32,7 @@ var tmpl = template.Must(template.New("tmpl").Parse(`
 
 func init() {
 	http.HandleFunc("/upload", upload)
+	http.HandleFunc("/fetch", fetch)
 }
 
 func upload(w http.ResponseWriter, r *http.Request) {
@@ -41,7 +44,11 @@ func upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer mpf.Close()
-	g, err := gif.DecodeAll(mpf)
+	write(c, w, mpf)
+}
+
+func write(c appengine.Context, w http.ResponseWriter, r io.Reader) {
+	g, err := gif.DecodeAll(r)
 	if err != nil {
 		c.Errorf("gif decode: %v", err)
 		http.Error(w, "Error decoding GIF", http.StatusBadRequest)
@@ -62,6 +69,23 @@ func upload(w http.ResponseWriter, r *http.Request) {
 	tmpl.Execute(w, struct {
 		Frames []string
 	}{fs})
+}
+
+func fetch(w http.ResponseWriter, r *http.Request) {
+	url := r.FormValue("url")
+	if url == "" {
+		http.Error(w, "Must provide URL to fetch", http.StatusBadRequest)
+		return
+	}
+	c := appengine.NewContext(r)
+	resp, err := urlfetch.Client(c).Get(url)
+	if err != nil {
+		c.Errorf("urlfetch: %v", err)
+		http.Error(w, "Error fetching", http.StatusBadRequest)
+		return
+	}
+	defer resp.Body.Close()
+	write(c, w, resp.Body)
 }
 
 type layered struct {
