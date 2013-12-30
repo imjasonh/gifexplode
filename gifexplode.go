@@ -19,14 +19,17 @@ import (
 
 const (
 	// Maximum total image size
-	maxImgSize = 1 << 22
+	maxImgSize = 1 << 23 // 8 MB
 
 	// Maximum single frame size
-	maxFrameSize = 1 << 18
+	maxFrameSize = 1 << 18 // 256 KB
 )
 
 var tmpl = template.Must(template.New("tmpl").Parse(`
 <html><body>
+{{if .Orig}}
+Original:<img src="{{.Orig}}" />
+{{end}}
 <ol>
   {{range .Frames}}
   <li><img src="{{.}}" /></li>
@@ -49,10 +52,10 @@ func upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer mpf.Close()
-	write(c, w, mpf)
+	write(c, w, mpf, "")
 }
 
-func write(c appengine.Context, w http.ResponseWriter, r io.Reader) {
+func write(c appengine.Context, w http.ResponseWriter, r io.Reader, url string) {
 	lim := &io.LimitedReader{R: r, N: maxImgSize}
 	g, err := gif.DecodeAll(lim)
 	if lim.N <= 0 {
@@ -77,8 +80,9 @@ func write(c appengine.Context, w http.ResponseWriter, r io.Reader) {
 		fs = append(fs, fmt.Sprintf("data:image/png;base64,%s", base64.StdEncoding.EncodeToString(buf.Bytes())))
 	}
 	tmpl.Execute(w, struct {
+		Orig   string
 		Frames []string
-	}{fs})
+	}{url, fs})
 }
 
 func fetch(w http.ResponseWriter, r *http.Request) {
@@ -98,7 +102,7 @@ func fetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	write(c, w, resp.Body)
+	write(c, w, resp.Body, url)
 }
 
 type layered struct {
