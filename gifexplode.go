@@ -35,11 +35,11 @@ func init() {
 func upload(w http.ResponseWriter, r *http.Request) {
 	c := appengine.NewContext(r)
 	mpf, _, err := r.FormFile("file")
-	//	if err != nil {
-	//		c.Errorf("formfile: %v", err)
-	//		http.Error(w, "No file specified", http.StatusBadRequest)
-	//		return
-	//	}
+	if err != nil {
+		c.Errorf("formfile: %v", err)
+		http.Error(w, "No file specified", http.StatusBadRequest)
+		return
+	}
 	defer mpf.Close()
 	g, err := gif.DecodeAll(mpf)
 	if err != nil {
