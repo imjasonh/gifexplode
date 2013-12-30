@@ -13,11 +13,16 @@ import (
 	"image/png"
 	"io"
 	"net/http"
+	"strings"
 	"text/template"
 )
 
 const (
-	bufSize = 2 << 17
+	// Maximum total image size
+	maxImgSize = 1 << 22
+
+	// Maximum single frame size
+	maxFrameSize = 1 << 18
 )
 
 var tmpl = template.Must(template.New("tmpl").Parse(`
@@ -48,7 +53,12 @@ func upload(w http.ResponseWriter, r *http.Request) {
 }
 
 func write(c appengine.Context, w http.ResponseWriter, r io.Reader) {
-	g, err := gif.DecodeAll(r)
+	lim := &io.LimitedReader{R: r, N: maxImgSize}
+	g, err := gif.DecodeAll(lim)
+	if lim.N <= 0 {
+		http.Error(w, "File too large, > 4MB", http.StatusBadRequest)
+		return
+	}
 	if err != nil {
 		c.Errorf("gif decode: %v", err)
 		http.Error(w, "Error decoding GIF", http.StatusBadRequest)
@@ -56,7 +66,7 @@ func write(c appengine.Context, w http.ResponseWriter, r io.Reader) {
 	}
 	fs := make([]string, 0, len(g.Image))
 	for _, i := range g.Image {
-		buf := bytes.NewBuffer(make([]byte, 0, bufSize))
+		buf := bytes.NewBuffer(make([]byte, 0, maxFrameSize))
 		// TODO: Upgrade to go1.2 and gif.Encode
 		err = png.Encode(buf, layered{g.Image[0], i})
 		if err != nil {
@@ -76,6 +86,9 @@ func fetch(w http.ResponseWriter, r *http.Request) {
 	if url == "" {
 		http.Error(w, "Must provide URL to fetch", http.StatusBadRequest)
 		return
+	}
+	if !strings.HasPrefix(url, "http") {
+		url = "http://" + url
 	}
 	c := appengine.NewContext(r)
 	resp, err := urlfetch.Client(c).Get(url)
