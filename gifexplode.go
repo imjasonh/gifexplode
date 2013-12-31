@@ -33,8 +33,13 @@ var later = delay.Func("explode", func(c appengine.Context, cid string, bk appen
 	if err != nil {
 		return err
 	}
-	for i := 0; i < len(frames); i++ {
-		if err := channel.Send(c, cid, frames[i]); err != nil {
+	l := len(frames)
+	type data struct {
+		I, L int
+		F    string
+	}
+	for i := 0; i < l; i++ {
+		if err := channel.SendJSON(c, cid, data{i, l, frames[i]}); err != nil {
 			return err
 		}
 	}
@@ -65,9 +70,11 @@ document.innerHTML = 'loading...';
 var tok = '{{.Tok}}';
 var s = new goog.appengine.Channel(tok).open();
 s.onmessage = function(m) {
-  var img = document.createElement('img');
-  img.src = m.data;
-  document.body.appendChild(img);
+  var d = JSON.parse(m.data);
+  for (var i = document.getElementsByTagName('img').length; i < d.L; i++) {
+    document.body.appendChild(document.createElement('img'));
+  }
+  document.getElementsByTagName('img')[d.I].src = d.F;
 };
 </script></body></html>
 `))
