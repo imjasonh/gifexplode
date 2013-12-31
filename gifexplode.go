@@ -2,10 +2,14 @@ package gifexplode
 
 import (
 	"appengine"
-	"appengine/urlfetch"
+	"appengine/blobstore"
+	"appengine/channel"
+	"appengine/datastore"
+	"appengine/delay"
 
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -13,60 +17,105 @@ import (
 	"image/png"
 	"io"
 	"net/http"
-	"strings"
 	"text/template"
 )
 
 const (
-	// Maximum total image size
-	maxImgSize = 1 << 23 // 8 MB
-
 	// Maximum single frame size
 	maxFrameSize = 1 << 18 // 256 KB
 )
 
-var tmpl = template.Must(template.New("tmpl").Parse(`
-<html><body>
-{{if .Orig}}
-Original:<img src="{{.Orig}}" />
-{{end}}
-<ol>
-  {{range .Frames}}
-  <li><img src="{{.}}" /></li>
-  {{end}}
-</ol>
-<p><a href="https://github.com/ImJasonH/gifexplode">source</a></p>
-</body></html>
-`))
+var later = delay.Func("explode", func(c appengine.Context, cid string, bk appengine.BlobKey) error {
+	if _, err := blobstore.Stat(c, bk); err == datastore.ErrNoSuchEntity {
+		return nil
+	}
+	frames, err := frames(c, blobstore.NewReader(c, bk))
+	if err != nil {
+		return err
+	}
+	for i := 0; i < len(frames); i++ {
+		if err := channel.Send(c, cid, frames[i]); err != nil {
+			return err
+		}
+	}
+	return blobstore.Delete(c, bk)
+})
 
 func init() {
+	http.HandleFunc("/", in)
 	http.HandleFunc("/upload", upload)
-	http.HandleFunc("/fetch", fetch)
+}
+
+var inTmpl = template.Must(template.New("in").Parse(`
+<html><body>
+<form action="{{.}}" method="POST" id="form" enctype="multipart/form-data">
+<input type="file" name="file" id="file" accept="image/gif"></input>
+<script type="text/javascript">
+document.getElementById('file').onchange = function() {
+  document.getElementById('form').submit();
+};
+</script></form></body></html>
+`))
+
+var outTmpl = template.Must(template.New("out").Parse(`
+<html><body>
+<script type="text/javascript" src="/_ah/channel/jsapi"></script>
+<script type="text/javascript">
+document.innerHTML = 'loading...';
+var tok = '{{.Tok}}';
+var s = new goog.appengine.Channel(tok).open();
+s.onmessage = function(m) {
+  var img = document.createElement('img');
+  img.src = m.data;
+  document.body.appendChild(img);
+};
+</script></body></html>
+`))
+
+func in(w http.ResponseWriter, r *http.Request) {
+	c := appengine.NewContext(r)
+	url, err := blobstore.UploadURL(c, "/upload", nil)
+	if err != nil {
+		c.Errorf("uploadurl: %v", err)
+		http.Error(w, "Error getting upload URL", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html")
+	inTmpl.Execute(w, url)
 }
 
 func upload(w http.ResponseWriter, r *http.Request) {
 	c := appengine.NewContext(r)
-	mpf, _, err := r.FormFile("file")
+	blobs, _, err := blobstore.ParseUpload(r)
 	if err != nil {
-		c.Errorf("formfile: %v", err)
-		http.Error(w, "No file specified", http.StatusBadRequest)
+		c.Errorf("parseupload: %v", err)
+		http.Error(w, "Error parsing upload", http.StatusInternalServerError)
 		return
 	}
-	defer mpf.Close()
-	write(c, w, mpf, "")
+	f := blobs["file"]
+	if len(f) == 0 {
+		http.Error(w, "No file uploaded", http.StatusBadRequest)
+		return
+	}
+
+	cid := appengine.RequestID(c)
+	tok, err := channel.Create(c, cid)
+	if err != nil {
+		c.Errorf("create channel: %v", err)
+		http.Error(w, "Error creating channel", http.StatusInternalServerError)
+		return
+	}
+	later.Call(c, cid, f[0].BlobKey)
+	outTmpl.Execute(w, struct {
+		Tok string
+	}{tok})
 }
 
-func write(c appengine.Context, w http.ResponseWriter, r io.Reader, url string) {
-	lim := &io.LimitedReader{R: r, N: maxImgSize}
-	g, err := gif.DecodeAll(lim)
-	if lim.N <= 0 {
-		http.Error(w, "File too large, > 4MB", http.StatusBadRequest)
-		return
-	}
+func frames(c appengine.Context, r io.Reader) ([]string, error) {
+	g, err := gif.DecodeAll(r)
 	if err != nil {
 		c.Errorf("gif decode: %v", err)
-		http.Error(w, "Error decoding GIF", http.StatusBadRequest)
-		return
+		return nil, errors.New("Error decoding GIF")
 	}
 	fs := make([]string, 0, len(g.Image))
 	for _, i := range g.Image {
@@ -75,35 +124,11 @@ func write(c appengine.Context, w http.ResponseWriter, r io.Reader, url string) 
 		err = png.Encode(buf, layered{g.Image[0], i})
 		if err != nil {
 			c.Errorf("png encode: %v", err)
-			http.Error(w, "Error encoding", http.StatusInternalServerError)
-			return
+			return nil, errors.New("Error encoding frame")
 		}
 		fs = append(fs, fmt.Sprintf("data:image/png;base64,%s", base64.StdEncoding.EncodeToString(buf.Bytes())))
 	}
-	tmpl.Execute(w, struct {
-		Orig   string
-		Frames []string
-	}{url, fs})
-}
-
-func fetch(w http.ResponseWriter, r *http.Request) {
-	url := r.FormValue("url")
-	if url == "" {
-		http.Error(w, "Must provide URL to fetch", http.StatusBadRequest)
-		return
-	}
-	if !strings.HasPrefix(url, "http") {
-		url = "http://" + url
-	}
-	c := appengine.NewContext(r)
-	resp, err := urlfetch.Client(c).Get(url)
-	if err != nil {
-		c.Errorf("urlfetch: %v", err)
-		http.Error(w, "Error fetching", http.StatusBadRequest)
-		return
-	}
-	defer resp.Body.Close()
-	write(c, w, resp.Body, url)
+	return fs, nil
 }
 
 type layered struct {
