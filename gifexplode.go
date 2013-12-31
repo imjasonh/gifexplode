@@ -138,7 +138,7 @@ func fetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !strings.HasPrefix(url, "http") {
-		url = "http://"+url
+		url = "http://" + url
 	}
 	cid := appengine.RequestID(c)
 	tok, err := channel.Create(c, cid)
