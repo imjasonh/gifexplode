@@ -59,19 +59,9 @@ var outTmpl = template.Must(template.New("out").Parse(`
 <html><body>
 <div id="loading">Loading...</div>
 <script type="text/javascript" src="/_ah/channel/jsapi"></script>
-<script type="text/javascript">
-document.innerHTML = 'loading...';
-var tok = '{{.Tok}}';
-var s = new goog.appengine.Channel(tok).open();
-s.onmessage = function(m) {
-  document.getElementById('loading').style.display = 'none';
-  var d = JSON.parse(m.data);
-  for (var i = document.getElementsByTagName('img').length; i < d.L; i++) {
-    document.body.appendChild(document.createElement('img'));
-  }
-  document.getElementsByTagName('img')[d.I].src = d.F;
-};
-</script></body></html>
+<script type="text/javascript">tok = '{{.Tok}}';</script>
+<script type="text/javascript" src="/client.js"></script>
+</body></html>
 `))
 
 func in(w http.ResponseWriter, r *http.Request) {
@@ -123,8 +113,10 @@ var blobLater = delay.Func("bloblater", func(c appengine.Context, cid string, bk
 	}
 	l := len(fs)
 	for i := 0; i < l; i++ {
-		if err := channel.SendJSON(c, cid, data{i, l, fs[i]}); err != nil {
-			return err
+		for try := 0; ; try++ {
+			if err := channel.SendJSON(c, cid, data{i, l, fs[i]}); try == 10 && err != nil {
+				return err
+			}
 		}
 	}
 	return blobstore.Delete(c, bk)
