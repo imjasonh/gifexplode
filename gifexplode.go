@@ -10,6 +10,7 @@ import (
 
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
@@ -111,16 +112,29 @@ var blobLater = delay.Func("bloblater", func(c appengine.Context, cid string, bk
 	if err != nil {
 		return err
 	}
-	l := len(fs)
-	for i := 0; i < l; i++ {
-		for try := 0; ; try++ {
-			if err := channel.SendJSON(c, cid, data{i, l, fs[i]}); try == 10 && err != nil {
-				return err
-			}
-		}
+	if err := send(c, cid, fs); err != nil {
+		return err
 	}
 	return blobstore.Delete(c, bk)
 })
+
+func send(c appengine.Context, cid string, fs []string) error {
+	l := len(fs)
+	for i := 0; i < l; i++ {
+		b, err := json.Marshal(data{i, l, fs[i]})
+		if err != nil {
+			return fmt.Errorf("channel json: %v", err)
+		}
+		if len(b) > 32768 {
+			c.Infof("frame %d > 32k: %d", i, len(b))
+			// TODO: Split large messages into digestible bites and reassemble in the client
+		}
+		if err := channel.Send(c, cid, string(b)); err != nil {
+			return fmt.Errorf("channel send: %v", err)
+		}
+	}
+	return nil
+}
 
 func fetch(w http.ResponseWriter, r *http.Request) {
 	c := appengine.NewContext(r)
@@ -155,13 +169,7 @@ var fetchLater = delay.Func("fetchlater", func(c appengine.Context, cid, url str
 	if err != nil {
 		return err
 	}
-	l := len(fs)
-	for i := 0; i < l; i++ {
-		if err := channel.SendJSON(c, cid, data{i, l, fs[i]}); err != nil {
-			return err
-		}
-	}
-	return nil
+	return send(c, cid, fs)
 })
 
 func frames(c appengine.Context, r io.Reader) ([]string, error) {
