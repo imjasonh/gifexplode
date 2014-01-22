@@ -8,6 +8,9 @@ import (
 	"appengine/delay"
 	"appengine/urlfetch"
 
+	"code.google.com/p/goauth2/appengine/serviceaccount"
+	storage "code.google.com/p/google-api-go-client/storage/v1beta1"
+
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
@@ -22,9 +25,6 @@ import (
 	"strings"
 	"text/template"
 )
-
-// Maximum single frame size
-const maxFrameSize = 1 << 18 // 256 KB
 
 func init() {
 	http.HandleFunc("/", in)
@@ -122,38 +122,14 @@ type data struct {
 }
 
 func send(c appengine.Context, cid string, frames []string) error {
-	totalFrames := len(frames)
-	for frameNum, frameData := range frames {
-		chunks := chunkify(frameData)
-		totalParts := len(chunks)
-		for partNum, partData := range chunks {
-			b, err := json.Marshal(data{frameNum, totalFrames, partNum, totalParts, partData})
-			if err != nil {
-				return fmt.Errorf("channel json: %v", err)
-			}
-			if err := channel.Send(c, cid, string(b)); err != nil {
-				return fmt.Errorf("channel send: %v", err)
-			}
-		}
+	link, err := store(c, cid, frames)
+	if err != nil {
+		return err
+	}
+	if err := channel.Send(c, cid, *link); err != nil {
+		return err
 	}
 	return nil
-}
-
-// Max size of a data chunk to send to the client. Channel API messages have
-// a 32K limit, and we send JSON packets with some overhead (~50B)
-const chunkSize = 32*1024 - 50
-
-// Chunkify a big string into smaller strings
-func chunkify(s string) []string {
-	chunks := make([]string, 0, len(s)/chunkSize+1)
-	for i := 0; i < len(s); i += chunkSize {
-		end := i + chunkSize
-		if end > len(s) {
-			end = len(s)
-		}
-		chunks = append(chunks, s[i:end])
-	}
-	return chunks
 }
 
 func fetch(w http.ResponseWriter, r *http.Request) {
@@ -192,6 +168,9 @@ var fetchLater = delay.Func("fetchlater", func(c appengine.Context, cid, url str
 	return send(c, cid, frames)
 })
 
+// Maximum single frame size
+const maxFrameSize = 1 << 18 // 256 KB
+
 func framify(c appengine.Context, r io.Reader) ([]string, error) {
 	g, err := gif.DecodeAll(r)
 	if err != nil {
@@ -210,6 +189,37 @@ func framify(c appengine.Context, r io.Reader) ([]string, error) {
 		frames = append(frames, fmt.Sprintf("data:image/png;base64,%s", base64.StdEncoding.EncodeToString(buf.Bytes())))
 	}
 	return frames, nil
+}
+
+// GCS bucket we'll upload to
+const bucket = "gifexplode"
+
+// Max GCS object size
+const bufSize = 1 << 26 // 64 MB
+
+func store(c appengine.Context, cid string, frames []string) (*string, error) {
+	buf := bytes.NewBuffer(make([]byte, bufSize))
+	if err := json.NewEncoder(buf).Encode(frames); err != nil {
+		return nil, err
+	}
+	client, err := serviceaccount.NewClient(c, storage.DevstorageRead_writeScope)
+	if err != nil {
+		return nil, err
+	}
+	svc, err := storage.New(client)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := svc.Objects.Insert(bucket, &storage.Object{
+		Name: cid,
+		Media: &storage.ObjectMedia{
+			ContentType: "application/json",
+		},
+	}).Media(buf).Do()
+	if err != nil {
+		return nil, err
+	}
+	return &resp.SelfLink, nil
 }
 
 type layered struct {
