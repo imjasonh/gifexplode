@@ -103,11 +103,11 @@ var blobLater = delay.Func("bloblater", func(c appengine.Context, cid string, bk
 	if _, err := blobstore.Stat(c, bk); err == datastore.ErrNoSuchEntity {
 		return nil
 	}
-	fs, err := frames(c, blobstore.NewReader(c, bk))
+	frames, err := framify(c, blobstore.NewReader(c, bk))
 	if err != nil {
 		return err
 	}
-	if err := send(c, cid, fs); err != nil {
+	if err := send(c, cid, frames); err != nil {
 		return err
 	}
 	return blobstore.Delete(c, bk)
@@ -121,9 +121,9 @@ type data struct {
 	Data        string `json:"d"`
 }
 
-func send(c appengine.Context, cid string, fs []string) error {
-	totalFrames := len(fs)
-	for frameNum, frameData := range fs {
+func send(c appengine.Context, cid string, frames []string) error {
+	totalFrames := len(frames)
+	for frameNum, frameData := range frames {
 		chunks := chunkify(frameData)
 		totalParts := len(chunks)
 		for partNum, partData := range chunks {
@@ -185,20 +185,20 @@ var fetchLater = delay.Func("fetchlater", func(c appengine.Context, cid, url str
 		return err
 	}
 	defer resp.Body.Close()
-	fs, err := frames(c, resp.Body)
+	frames, err := framify(c, resp.Body)
 	if err != nil {
 		return err
 	}
-	return send(c, cid, fs)
+	return send(c, cid, frames)
 })
 
-func frames(c appengine.Context, r io.Reader) ([]string, error) {
+func framify(c appengine.Context, r io.Reader) ([]string, error) {
 	g, err := gif.DecodeAll(r)
 	if err != nil {
 		c.Errorf("gif decode: %v", err)
 		return nil, errors.New("Error decoding GIF")
 	}
-	fs := make([]string, 0, len(g.Image))
+	frames := make([]string, 0, len(g.Image))
 	for _, i := range g.Image {
 		buf := bytes.NewBuffer(make([]byte, 0, maxFrameSize))
 		// TODO: Upgrade to go1.2 and gif.Encode
@@ -207,9 +207,9 @@ func frames(c appengine.Context, r io.Reader) ([]string, error) {
 			c.Errorf("png encode: %v", err)
 			return nil, errors.New("Error encoding frame")
 		}
-		fs = append(fs, fmt.Sprintf("data:image/png;base64,%s", base64.StdEncoding.EncodeToString(buf.Bytes())))
+		frames = append(frames, fmt.Sprintf("data:image/png;base64,%s", base64.StdEncoding.EncodeToString(buf.Bytes())))
 	}
-	return fs, nil
+	return frames, nil
 }
 
 type layered struct {
