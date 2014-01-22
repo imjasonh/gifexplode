@@ -26,11 +26,6 @@ import (
 // Maximum single frame size
 const maxFrameSize = 1 << 18 // 256 KB
 
-type data struct {
-	I, L int
-	F    string
-}
-
 func init() {
 	http.HandleFunc("/", in)
 	http.HandleFunc("/upload", upload)
@@ -118,22 +113,47 @@ var blobLater = delay.Func("bloblater", func(c appengine.Context, cid string, bk
 	return blobstore.Delete(c, bk)
 })
 
+type data struct {
+	FrameNum    int    `json:"f"`
+	TotalFrames int    `json:"tf"`
+	FramePart   int    `json:"p"`
+	TotalParts  int    `json:"tp"`
+	Data        string `json:"d"`
+}
+
 func send(c appengine.Context, cid string, fs []string) error {
-	l := len(fs)
-	for i := 0; i < l; i++ {
-		b, err := json.Marshal(data{i, l, fs[i]})
-		if err != nil {
-			return fmt.Errorf("channel json: %v", err)
-		}
-		if len(b) > 32768 {
-			c.Infof("frame %d > 32k: %d", i, len(b))
-			// TODO: Split large messages into digestible bites and reassemble in the client
-		}
-		if err := channel.Send(c, cid, string(b)); err != nil {
-			return fmt.Errorf("channel send: %v", err)
+	totalFrames := len(fs)
+	for frameNum, frameData := range fs {
+		chunks := chunkify(frameData)
+		totalParts := len(chunks)
+		for partNum, partData := range chunks {
+			b, err := json.Marshal(data{frameNum, totalFrames, partNum, totalParts, partData})
+			if err != nil {
+				return fmt.Errorf("channel json: %v", err)
+			}
+			if err := channel.Send(c, cid, string(b)); err != nil {
+				return fmt.Errorf("channel send: %v", err)
+			}
 		}
 	}
 	return nil
+}
+
+// Max size of a data chunk to send to the client. Channel API messages have
+// a 32K limit, and we send JSON packets with some overhead (~50B)
+const chunkSize = 32*1024 - 50
+
+// Chunkify a big string into smaller strings
+func chunkify(s string) []string {
+	chunks := make([]string, 0, len(s)/chunkSize+1)
+	for i := 0; i < len(s); i += chunkSize {
+		end := i + chunkSize
+		if end > len(s) {
+			end = len(s)
+		}
+		chunks = append(chunks, s[i:end])
+	}
+	return chunks
 }
 
 func fetch(w http.ResponseWriter, r *http.Request) {

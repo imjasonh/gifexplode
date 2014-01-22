@@ -3,16 +3,34 @@ var imgs = [];
 var s = new goog.appengine.Channel(tok).open();
 s.onmessage = function(m) {
   var d = JSON.parse(m.data);
-  imgs[d.I] = d.F;
-  document.body.innerHTML = 'Loaded ' + d.I + ' of ' + d.L;
-  if (ready(d.L)) {
-    show(d.L);
+
+  // Init imgs to undef-filled arr
+  if (imgs.length < d.tf - 1) {
+    imgs[d.tf - 1] = undefined;
+  }
+
+  // Init parts to undef-filled arr
+  if (imgs[d.f] == undefined) {
+    imgs[d.f] = [];
+    imgs[d.f][d.tp - 1] = undefined;
+  }
+  imgs[d.f][d.p] = d.d;
+
+  if (noneUndefined(imgs[d.f])) {
+    // This frame is done, reassemble its data
+    imgs[d.f] = imgs[d.f].join('');
+    document.body.innerHTML = 'Loaded ' + d.f + ' of ' + d.tf;
+
+    if (noneUndefined(imgs)) {
+      // All frames are done, show the image
+      show(d.tf);
+    }
   }
 };
 
-var ready = function(total) {
-  for (var i = 0; i < total; i++) {
-    if (imgs[i] == undefined) {
+var noneUndefined = function(arr) {
+  for (var i = 0; i < arr.length; i++) {
+    if (arr[i] == undefined) {
       return false;
     }
   }
